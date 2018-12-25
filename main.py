@@ -1,3 +1,4 @@
+
 import cv2
 import numpy as np
 import time
@@ -6,11 +7,12 @@ from matplotlib import pyplot as plt
 #EDIT THRESHOLDS HERE
 t1=30 # the threshold for the frames difference
 t2=2 #the arm vertial remoal pixels in the arm detection mask
-t3=0.95 # selection of good matches
+t3=0.85 # selection of good matches
 t4=8 #erosion and dilation kernel 
 t5=300 #noise maximum height in arm detection
+t6=10 #ORB feature extractor edge threshold
 MIN_MATCH_COUNT=1
-armWidth=50 
+armWidth=80 
 armMask=[[],[]]
 armMask[0]=np.array([],dtype = np.uint8)
 armMask[1]=np.array([],dtype = np.uint8)
@@ -55,11 +57,17 @@ def FastBriefFeaturesExtractor(image):
 
 def OrbFeaturesExtractor(image):
     # detecting the features
-    orb=cv2.ORB_create()
+    orb=cv2.ORB_create(edgeThreshold=t6)
     
     kps, des = orb.detectAndCompute(image, None)
-    kpimg = cv2.drawKeypoints(image, kps, None, flags=cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
-    cv2.imshow("LeftArmMatching", np.fliplr(kpimg))
+    #print(kps)
+    #print(des)
+    '''kpimg = cv2.drawKeypoints(image, kps, None, flags=cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
+    for test in range (0,5):
+        
+        cv2.imshow("LeftArmMatching", np.fliplr(kpimg))
+        time.sleep(1)
+    '''
     return (kps,des)
 
 #arm detection here
@@ -154,11 +162,11 @@ def detectArm(lr):
             #print(j)
             if armMask[lr][j][i]==0:
                 continue
-            armBorderSum+=armMask[lr][j-2*t2][i]
+            armBorderSum+=armMask[lr][j-3*t2][i]
             counter+=1
-            for modify in range(j-2*t2,j):
+            for modify in range(j-3*t2,j):
                 #print(i,modify,"down")
-                armMask[lr][modify][i]=armMask[lr][j-2*t2][i]
+                armMask[lr][modify][i]=armMask[lr][j-3*t2][i]
             break
     borderAvg=armBorderSum//counter
     #this loop replaces the black pixels in each arm mask with the avg of the arm border pixels to eliminate bad features           
@@ -231,8 +239,77 @@ def setup():
     person = cv2.morphologyEx(person,cv2.MORPH_OPEN,OP)
     person = cv2.morphologyEx(person,cv2.MORPH_CLOSE,CL)
 
+
+def BFMatcher(trainKps,trainDescriptors,liveDes):
+    
+    bf = cv2.BFMatcher()
+    matches = bf.knnMatch(liveDes,trainDescriptors, k=2)
+    #print(len(matches))
+    good = []
+    goodForDraw=[]
+    
+    for i in range(1,len(matches)):
+            if type(matches[i]) != type(matches[i-1]):
+                print('Holy Moly:')
+                
+            
+    for m,n in matches:
+        if type(m) == type(n):
+                if m.distance < t3*n.distance:
+                    good.append(m)
+                    goodForDraw.append([m])
+    
+    '''
+    for m in matches:
+        for n in matches:
+            #print(type(m), type(n))
+            if type(m) == type(n):
+                if m.distance < t3*n.distance:
+                    good.append(m)
+                    goodForDraw.append([m])
+    '''
+    #print(matches)
+    #img3 = cv2.drawMatchesKnn(liveFrame,liveKps,armMask[0],trainKps,goodForDraw,None,flags=2)
+    
+    return good
+
+def Homography(armKps,matches,armGray):
+    global liveGray
+    
+    if len(matches)>=MIN_MATCH_COUNT: 
+             
+        src_pts = np.float32([liveKps[m.queryIdx].pt for m in matches ]).reshape(-1,1,2)
+        
+        dst_pts = np.float32([armKps[m.trainIdx].pt for m in matches ]).reshape(-1,1,2)
+    
+        M, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC,5.0)
+        if M is None:
+            return (False,[[]])
+        matchesMaskLeft = mask.ravel().tolist()
+    
+        h,w = liveGray.shape
+        pts = np.float32([ [0,0],[0,h-1],[w-1,h-1],[w-1,0] ]).reshape(-1,1,2)
+        dst = cv2.perspectiveTransform(pts,M)
+    
+        liveGray = cv2.polylines(liveGray,[np.int32(dst)],True,255,3, cv2.LINE_AA)
+
+    else:
+        print ("Not enough matches are found - %d/%d" % (len(matches),MIN_MATCH_COUNT))
+        matchesMaskLeft = None
+    draw_params = dict(matchColor = (0,255,0), # draw matches in green color
+           singlePointColor = None,
+           matchesMask = matchesMaskLeft, # draw only inliers
+           flags = 0)
+    
+    liveWithMatches =cv2.drawMatches(liveGray,liveKps,armGray,armKps,matches,None,**draw_params)
+    return (True,liveWithMatches)
+    
+    
+    
+    
 def main(): 
     #
+    global liveDes,liveKps,liveFrame,liveGray,leftArmKps,rightArmKps
     setup()
     detectArm(0)
     showDetected(person)
@@ -242,8 +319,8 @@ def main():
     print("sec arm detected")
     
     #calculate the keypoints and the descriptors of each arm
-    leftArmKps,leftArmDes = SiftFeaturesExtractor(armMask[1])
-    rightArmKps,rightArmDes = SiftFeaturesExtractor(armMask[0])
+    leftArmKps,leftArmDes = OrbFeaturesExtractor(armMask[1])
+    rightArmKps,rightArmDes = OrbFeaturesExtractor(armMask[0])
     # These are some validation for the features list of each arm
 
     if leftArmDes is None :
@@ -253,28 +330,29 @@ def main():
             time.sleep(5)
             setup()
             if detectArm(1)==True:
-                leftArmKps,leftArmDes = SiftFeaturesExtractor(armMask[1])
+                leftArmKps,leftArmDes = OrbFeaturesExtractor(armMask[1])
     elif len(leftArmDes)<2:
         while leftArmDes is None:
             print("left arm features list has length less than the num of neighbours.. the setup will start again in 5 secs")
             time.sleep(5)
             setup()
             if detectArm(1)==True:
-                leftArmKps,leftArmDes = SiftFeaturesExtractor(armMask[1])
+                leftArmKps,leftArmDes = OrbFeaturesExtractor(armMask[1])
     if rightArmDes is None :
         while rightArmDes is None:
             print("right arm features list is empty.. the setup will start again in 5 secs")
             time.sleep(5)
             setup()
             if detectArm(0)==True:
-                rightArmKps,rightArmDes = SiftFeaturesExtractor(armMask[0])
+                rightArmKps,rightArmDes = OrbFeaturesExtractor(armMask[0])
     elif len(rightArmDes)<2:
         while rightArmDes is None:
             print("left arm features list has length less than the num of neighbours.. the setup will start again in 5 secs")
             time.sleep(5)
             setup()
             if detectArm(0)==True:
-                rightArmKps,rightArmDes = SiftFeaturesExtractor(armMask[0])
+                rightArmKps,rightArmDes = OrbFeaturesExtractor(armMask[0])
+    
     #el hog
     '''
     print(armMask[0].shape)
@@ -289,7 +367,10 @@ def main():
         liveRet, liveFrame = cap.read()
         if liveRet:
             liveGray= cv2.cvtColor(liveFrame, cv2.COLOR_BGR2GRAY)
-            livekps,liveDes = SiftFeaturesExtractor(liveGray)
+            liveKps,liveDes = OrbFeaturesExtractor(liveGray)
+            if liveDes is None:
+                print("Live des is empty")
+                continue
             #create matcher obj
             
             '''
@@ -309,25 +390,54 @@ def main():
             cv2.imshow("image", np.fliplr(tmp))
             cv2.imshow("left", np.fliplr(armMask[1]))
             cv2.imshow("right", np.fliplr(armMask[0]))
-            FLANN_INDEX_KDTREE = 0
-            index_params = dict(algorithm = FLANN_INDEX_KDTREE, trees = 5)
+        
+            #FLANN_INDEX_KDTREE = 0
+            #index_params = dict(algorithm = FLANN_INDEX_KDTREE, trees = 5)
             search_params = dict(checks=50)   # or pass empty dictionary
+            FLANN_INDEX_LSH = 6
+            index_params= dict(algorithm = FLANN_INDEX_LSH,
+                   table_number = 6, # 12
+                   key_size = 12,     # 20
+                   multi_probe_level = 1) #2
+            #this check is supposed to make the descriptors in the same format no matter what algorithm was used
+            leftArmMatches=BFMatcher(leftArmKps,leftArmDes,liveDes)
+            rightArmMatches=BFMatcher(rightArmKps,rightArmDes,liveDes)
+            
+            '''
             flann = cv2.FlannBasedMatcher(index_params,search_params)
-            leftArmMatches = flann.knnMatch(leftArmDes,liveDes,k=2)
-            rightArmMatches = flann.knnMatch(rightArmDes,liveDes,k=2)
+            try :
+                leftArmMatches = flann.knnMatch(leftArmDes,liveDes,k=2)
+            except ValueError:
+                print ("error in left arm matching")
+                continue
+            try :
+                rightArmMatches = flann.knnMatch(rightArmDes,liveDes,k=2)
+            except ValueError:
+                print ("error in right arm matching")
+                continue
             #leftArmMatches = sorted(leftArmMatches, key = lambda x:x.distance)
             # Need to draw only good matches, so create a mask
+            '''
             
+            if len(leftArmMatches)==0  :
+                print ("No left arm matches found")
+                continue
+            
+            if len(rightArmMatches)==0  :
+                print ("No right arm matches found")
+                continue
+            
+            # ratio test as per Lowe's paper
+            '''
             leftmatchesMask = [[0,0] for i in range(len(leftArmMatches))]
             rightmatchesMask = [[0,0] for i in range(len(rightArmMatches))]
-
-            # ratio test as per Lowe's paper
             for i,(m,n) in enumerate(leftArmMatches):
                 if m.distance < t3*n.distance:
                     leftmatchesMask[i]=[1,0]
             for i,(m,n) in enumerate(rightArmMatches):
                 if m.distance < t3*n.distance:
                     rightmatchesMask[i]=[1,0]
+            
             draw_params = dict(matchColor = (0,255,0),
                                singlePointColor = (255,0,0),
                                matchesMask = leftmatchesMask,
@@ -343,48 +453,41 @@ def main():
             cv2.imshow("rightArmMatching", np.fliplr(matchesRightVisualization))
             '''
             #matching and homography
+            success,finalArmLeft=Homography(leftArmKps,leftArmMatches,armMask[1])
+            if success:
+                window = cv2.namedWindow("LeftArmMatching", cv2.WINDOW_NORMAL)
+                cv2.resizeWindow("LeftArmMatching", 700,500)
+                cv2.imshow("LeftArmMatching", np.fliplr(finalArmLeft))
+                
+            success,finalArmRight=Homography(rightArmKps,rightArmMatches,armMask[0])
+            if success:
+                window = cv2.namedWindow("RightArmMatching", cv2.WINDOW_NORMAL)
+                cv2.resizeWindow("RightArmMatching", 700,500)
+                cv2.imshow("RightArmMatching", np.fliplr(finalArmRight))
+                
+            #for i in range(len(leftArmMatches)):
+                #print(leftArmMatches[i].queryIdx)
 
-            
             # store all the good matches as per Lowe's ratio test.
-            goodLeft = []
+            '''goodLeft = []
             for m,n in leftArmMatches:
-                if m.distance < 0.7*n.distance:
+                if m.distance < t3*n.distance:
                     goodLeft.append(m)
             goodRight = []
             for m,n in rightArmMatches:
                 if m.distance < t3*n.distance:
                     goodRight.append(m)
-            # now the homogram 
-            if len(goodLeft)>=MIN_MATCH_COUNT:
-                src_pts = np.float32([ leftArmKps[m.queryIdx].pt for m in goodLeft ]).reshape(-1,1,2)
-                dst_pts = np.float32([ livekps[m.trainIdx].pt for m in goodLeft ]).reshape(-1,1,2)
-            
-                M, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC,5.0)
-                if not M:
-                    continue
-                matchesMaskLeft = mask.ravel().tolist()
-            
-                h,w = armMask[1].shape
-                pts = np.float32([ [0,0],[0,h-1],[w-1,h-1],[w-1,0] ]).reshape(-1,1,2)
-                dst = cv2.perspectiveTransform(pts,M)
-            
-                liveGray = cv2.polylines(liveGray,[np.int32(dst)],True,255,3, cv2.LINE_AA)
-        
-            else:
-                print ("Not enough matches are found - %d/%d" % (len(goodLeft),MIN_MATCH_COUNT))
-                matchesMaskLeft = None
-            draw_params = dict(matchColor = (0,255,0), # draw matches in green color
-                   singlePointColor = None,
-                   matchesMask = matchesMaskLeft, # draw only inliers
-                   flags = 2)
-
-            leftFinal = cv2.drawMatches(armMask[1],leftArmKps,liveGray,livekps,goodLeft,None,**draw_params)
-            
-            cv2.imshow("LeftArmMatching", np.fliplr(leftFinal))
             '''
+            
             k = cv2.waitKey(1) & 0x0FF
             if k == ord('q') or k == ord('Q'):
                 break
+            elif k == ord('t') or k == ord('T'):
+                cap.release()
+                cv2.destroyAllWindows()
+                return
+        else:
+            break
     
     
     cap.release()
@@ -394,6 +497,3 @@ def main():
     
 if __name__== "__main__":
   main()    
-    
-    
-    
