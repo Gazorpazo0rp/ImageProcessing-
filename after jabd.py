@@ -6,7 +6,7 @@ from matplotlib import pyplot as plt
 
 #EDIT THRESHOLDS HERE
 t1=30 # the threshold for the frames difference
-t2=3  #the arm vertial remoal pixels in the arm detection mask
+t2=3 #the arm vertial remoal pixels in the arm detection mask
 t3=0.85 # selection of good matches
 t4=8 #erosion and dilation kernel 
 t5=300 #noise maximum height in arm detection
@@ -377,16 +377,16 @@ def main():
         liveRet, liveFrame = cap.read()
         if liveRet:
             liveGray= cv2.cvtColor(liveFrame, cv2.COLOR_BGR2GRAY)
-            if isFirstFrame:
+            '''if isFirstFrame:
                 #initialize the windows
                 leftWindow=liveGray[:,liveGray.shape[1]/2]
                 rightWindow=liveGray[:,liveGray[1]/2:liveGray.shape[1]-1]
-                isFirstFrame=False
+                
                 
             else:
                 # set the windows to the new coordinate
                 print("0")
-                
+            '''    
             window[0]=liveGray[:,0:liveGray.shape[1]//2]
             window[1]=liveGray[:,liveGray.shape[1]//2:liveGray.shape[1]-1]
             leftWindowKps,leftWindowDes = OrbFeaturesExtractor(window[1])
